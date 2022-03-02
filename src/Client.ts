@@ -166,7 +166,7 @@ export default class DanBotClient {
 			if (res.error) throw RequestError("BadRequest", res.error);
 		} else if (res.status === 429) {
 			if (res.error) throw RequestError("RateLimit", res.error);
-		} else RequestError("UNKNOWN", "An unknown error occured", res.status);
+		} else RequestError("Unknown", "An unknown error occured", res.status);
 	}
 	private static transformClient(
 		client: DiscordJSClient | ErisClient | ClientWithoutLibraryOptions,

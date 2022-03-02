@@ -6,6 +6,6 @@ export default {
 		InternalServerError: "INTERNAL_SERVER_ERROR",
 		BadRequest: "BAD_REQUEST",
 		RateLimit: "RATE_LIMIT",
-		UNKNOWN: "UNKNOWN",
+		Unknown: "UNKNOWN",
 	},
 };
