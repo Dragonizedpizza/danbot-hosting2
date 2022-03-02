@@ -1,6 +1,6 @@
 import { join } from "path";
 import Centra from "centra";
-import Constants from "./Constants";
+import { Constants } from "./Constants";
 
 export type LibraryClient = DiscordJSClient | ErisClient;
 
@@ -67,10 +67,10 @@ export interface Client {
  * The DanBot client, for checking node statuses or posting stats to the API.
  */
 
-export default class DanBotClient {
-	public APIKey?: string;
-	public client?: Client;
-	public options?: ExtraOptions;
+export class DanBotClient {
+	public APIKey!: string;
+	public client: Client;
+	public options: ExtraOptions;
 
 	/**
 	 * Creates a new DanBotClient.
@@ -78,9 +78,8 @@ export default class DanBotClient {
 	 */
 
 	public constructor(
-		options?: ClientWithLibraryOptions | ClientWithoutLibraryOptions,
+		options: ClientWithLibraryOptions | ClientWithoutLibraryOptions,
 	) {
-		if (!options) return;
 
 		const { options: extraOptions = {}, APIKey } = options;
 
@@ -114,14 +113,14 @@ export default class DanBotClient {
 
 			setTimeout(
 				() =>
-					(this.client!.guildCount +=
+					(this.client.guildCount +=
 						extraOptions.increment?.guild ?? 30),
 				extraOptions.increment?.guildTimeout ?? 300000, // Add an amount (default = 30) of users every timeout (default = 5 minutes)
 			);
 
 			setTimeout(
 				() =>
-					(this.client!.userCount +=
+					(this.client.userCount +=
 						extraOptions.increment?.guild ?? 2),
 				extraOptions.increment?.userTimeout ?? 3600000, // Add an amount (default = 2) of guilds every timeout (default = 1 hour)
 			);
@@ -134,18 +133,18 @@ export default class DanBotClient {
 
 		this.options = extraOptions;
 	}
-	public async post({ guildCount, userCount }: { [x: string]: number }) {
+	public async post({ guildCount, userCount }: { guildCount?: number, userCount?: number } = {}) {
 		const res = await Centra(
-			join(Constants.BOT_STATS_URL, this.client!.id),
+			join(Constants.BOT_STATS_URL, this.client.id),
 			"POST",
 		)
 			.body(
 				{
-					servers: guildCount ?? this.client!.guildCount,
-					users: userCount ?? this.client!.userCount,
-					id: this.client!.id,
+					servers: guildCount ?? this.client.guildCount,
+					users: userCount ?? this.client.userCount,
+					id: this.client.id,
 					clientInfo: {
-						id: this.client!.id,
+						id: this.client.id,
 					},
 				},
 				"json",
