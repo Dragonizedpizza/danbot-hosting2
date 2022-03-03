@@ -20,12 +20,14 @@ export interface DiscordJSClient {
 	users: {
 		cache: MapLike;
 	};
+	token: string;
 }
 
 export interface ErisClient {
 	user: User;
 	guilds: MapLike;
 	users: MapLike;
+	token: string;
 }
 
 export interface ClientWithLibraryOptions {
@@ -42,6 +44,7 @@ export interface ClientWithoutLibraryOptions {
 	guildCount: number;
 	userCount: number;
 	options?: ExtraOptions;
+	token?: string;
 }
 
 export interface ExtraOptions {
@@ -57,11 +60,22 @@ export interface ExtraOptions {
 }
 
 export interface Client {
-	rawClient?: DiscordJSClient | ErisClient;
+	rawClient?: LibraryClient;
+	token?: string;
 	id: string;
 	guildCount: number;
 	userCount: number;
 }
+
+export interface ClientUserInfo {
+	id: string,
+	username: string,
+	discriminator: string,
+	avatar: string,
+	bot: boolean,
+	verified: boolean,
+	bio: string,
+};
 
 /**
  * The DanBot client, for checking node statuses or posting stats to the API.
@@ -80,7 +94,6 @@ export class DanBotClient {
 	public constructor(
 		options: ClientWithLibraryOptions | ClientWithoutLibraryOptions,
 	) {
-
 		const { options: extraOptions = {}, APIKey } = options;
 
 		/**
@@ -133,7 +146,10 @@ export class DanBotClient {
 
 		this.options = extraOptions;
 	}
-	public async post({ guildCount, userCount }: { guildCount?: number, userCount?: number } = {}) {
+	public async post({
+		guildCount,
+		userCount,
+	}: { guildCount?: number; userCount?: number } = {}) {
 		const res = await Centra(
 			join(Constants.BOT_STATS_URL, this.client.id),
 			"POST",
@@ -143,9 +159,7 @@ export class DanBotClient {
 					servers: guildCount ?? this.client.guildCount,
 					users: userCount ?? this.client.userCount,
 					id: this.client.id,
-					clientInfo: {
-						id: this.client.id,
-					},
+					clientInfo: this.client.rawClient ? this.client.rawClient.user : await this.fetchUserInfo(),
 				},
 				"json",
 			)
@@ -161,14 +175,34 @@ export class DanBotClient {
 				"An internal DanBot Hosting server error occured",
 				res.status,
 			);
-		else if (res.status === 400) {
-			if (res.error) throw RequestError("BadRequest", res.error);
-		} else if (res.status === 429) {
-			if (res.error) throw RequestError("RateLimit", res.error);
-		} else RequestError("Unknown", "An unknown error occured", res.status);
+		else if (res.status === 400 && res.error)
+			throw RequestError("BadRequest", res.error);
+		else if (res.status === 429 && res.error)
+			throw RequestError("RateLimit", res.error);
+		else RequestError("Unknown", "An unknown error occured", res.status);
+	}
+	private async fetchUserInfo(): Promise<ClientUserInfo> {
+		const Raw = await Centra(
+			Constants.BOT_STATS_URL,
+			"GET",
+		)
+			.header("Content-Type", "application/json")
+			.header("Authorization", "Bot " + this.client.token!)
+			.send()
+			.then((res) => res.json());
+
+		return {
+			id: Raw.id,
+			username: Raw.username,
+			discriminator: Raw.discriminator,
+			avatar: Raw.avatar,
+			bot: Raw.bot,
+			verified: Raw.verified,
+			bio: Raw.bio,
+		};
 	}
 	private static transformClient(
-		client: DiscordJSClient | ErisClient | ClientWithoutLibraryOptions,
+		client: LibraryClient | ClientWithoutLibraryOptions,
 	): Client {
 		if ((<LibraryClient>client).guilds) {
 			if ((<DiscordJSClient>client).guilds.cache)
@@ -183,7 +217,7 @@ export class DanBotClient {
 					},
 				};
 			else
-				return {
+				return DanBotClient.nonEnumerableProperty({
 					rawClient: <ErisClient>client,
 					id: (<ErisClient>client).user.id,
 					get guildCount(): number {
@@ -192,13 +226,22 @@ export class DanBotClient {
 					get userCount(): number {
 						return (<ErisClient>client).users.size;
 					},
-				};
+				}, "token", (<ErisClient>client).token);
 		} else
-			return {
+			return DanBotClient.nonEnumerableProperty({
 				id: (<ClientWithoutLibraryOptions>client).id,
 				guildCount: (<ClientWithoutLibraryOptions>client).guildCount,
 				userCount: (<ClientWithoutLibraryOptions>client).userCount,
-			};
+			}, "token", (<ClientWithoutLibraryOptions>client).token);
+	}
+	private static nonEnumerableProperty(target: any, key: string, value: any): any {
+		Object.defineProperty(target, key, {
+			value,
+			enumerable: false,
+			writable: true,
+		});
+
+		return target;
 	}
 }
 
@@ -212,4 +255,4 @@ function RequestError(
 			status ? `Status: ${errorCode}` : ""
 		}`,
 	);
-};
+}
