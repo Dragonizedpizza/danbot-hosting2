@@ -68,14 +68,14 @@ export interface Client {
 }
 
 export interface ClientUserInfo {
-	id: string;
-	username: string;
-	discriminator: string;
-	avatar: string;
-	bot: boolean;
-	verified: boolean;
-	bio: string;
-}
+	id: string,
+	username: string,
+	discriminator: string,
+	avatar: string,
+	bot: boolean,
+	verified: boolean,
+	bio: string,
+};
 
 /**
  * The DanBot client, for checking node statuses or posting stats to the API.
@@ -151,7 +151,7 @@ export class DanBotClient {
 		userCount,
 	}: { guildCount?: number; userCount?: number } = {}) {
 		const res = await Centra(
-			join(Constants.BOT_STATS_URL, this.client.id),
+			join(Constants.BOT_STATS_URL.replace("CLIENT_ID", this.client.id), this.client.id),
 			"POST",
 		)
 			.body(
@@ -159,9 +159,7 @@ export class DanBotClient {
 					servers: guildCount ?? this.client.guildCount,
 					users: userCount ?? this.client.userCount,
 					id: this.client.id,
-					clientInfo: this.client.rawClient
-						? this.client.rawClient.user
-						: await this.fetchUserInfo(),
+					clientInfo: this.client.rawClient ? this.client.rawClient.user : await this.fetchUserInfo(),
 				},
 				"json",
 			)
@@ -185,7 +183,7 @@ export class DanBotClient {
 	}
 	private async fetchUserInfo(): Promise<ClientUserInfo> {
 		const Raw = await Centra(
-			Constants.BOT_STATS_URL.replace("CLIENT_ID", this.client.id),
+			Constants.USERINFO_URL,
 			"GET",
 		)
 			.header("Content-Type", "application/json")
@@ -219,37 +217,24 @@ export class DanBotClient {
 					},
 				};
 			else
-				return DanBotClient.nonEnumerableProperty(
-					{
-						rawClient: <ErisClient>client,
-						id: (<ErisClient>client).user.id,
-						get guildCount(): number {
-							return (<ErisClient>client).guilds.size;
-						},
-						get userCount(): number {
-							return (<ErisClient>client).users.size;
-						},
+				return DanBotClient.nonEnumerableProperty({
+					rawClient: <ErisClient>client,
+					id: (<ErisClient>client).user.id,
+					get guildCount(): number {
+						return (<ErisClient>client).guilds.size;
 					},
-					"token",
-					(<ErisClient>client).token,
-				);
+					get userCount(): number {
+						return (<ErisClient>client).users.size;
+					},
+				}, "token", (<ErisClient>client).token);
 		} else
-			return DanBotClient.nonEnumerableProperty(
-				{
-					id: (<ClientWithoutLibraryOptions>client).id,
-					guildCount: (<ClientWithoutLibraryOptions>client)
-						.guildCount,
-					userCount: (<ClientWithoutLibraryOptions>client).userCount,
-				},
-				"token",
-				(<ClientWithoutLibraryOptions>client).token,
-			);
+			return DanBotClient.nonEnumerableProperty({
+				id: (<ClientWithoutLibraryOptions>client).id,
+				guildCount: (<ClientWithoutLibraryOptions>client).guildCount,
+				userCount: (<ClientWithoutLibraryOptions>client).userCount,
+			}, "token", (<ClientWithoutLibraryOptions>client).token);
 	}
-	private static nonEnumerableProperty(
-		target: any,
-		key: string,
-		value: any,
-	): any {
+	private static nonEnumerableProperty(target: any, key: string, value: any): any {
 		Object.defineProperty(target, key, {
 			value,
 			enumerable: false,
