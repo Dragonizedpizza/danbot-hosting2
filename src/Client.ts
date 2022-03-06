@@ -1,4 +1,3 @@
-import { join } from "path";
 import Centra from "centra";
 import { Constants } from "./Constants";
 
@@ -8,12 +7,8 @@ export interface MapLike {
 	size: number;
 }
 
-export interface User {
-	id: string;
-}
-
 export interface DiscordJSClient {
-	user: User;
+	user: ClientUser;
 	guilds: {
 		cache: MapLike;
 	};
@@ -21,13 +16,15 @@ export interface DiscordJSClient {
 		cache: MapLike;
 	};
 	token: string;
+	readyAt?: number;
 }
 
 export interface ErisClient {
-	user: User;
+	user: ClientUser;
 	guilds: MapLike;
 	users: MapLike;
 	token: string;
+	ready: boolean;
 }
 
 export interface ClientWithLibraryOptions {
@@ -38,13 +35,31 @@ export interface ClientWithLibraryOptions {
 	userCount?: number;
 }
 
-export interface ClientWithoutLibraryOptions {
+export type ClientWithoutLibraryOptions =
+	| ClientWithoutLibraryUsingTokenOptions
+	| ClientWithoutLibraryUsingUserDefinedOptions;
+
+export interface ClientWithoutLibraryUsingTokenOptions {
+	APIKey: string;
+	guildCount?: number;
+	userCount: UserCount;
+	options?: ExtraOptions;
+	token: string;
+}
+
+export type UserCount = "RANDOM" | "ALL" | [number, number] | number;
+
+export interface ClientWithoutLibraryUsingUserDefinedOptions {
 	APIKey: string;
 	id: string;
 	guildCount: number;
-	userCount: number;
+	userCount: UserCount;
 	options?: ExtraOptions;
-	token?: string;
+	clientInfo: {
+		id: string;
+		avatar: string;
+		username: string;
+	};
 }
 
 export interface ExtraOptions {
@@ -61,21 +76,18 @@ export interface ExtraOptions {
 
 export interface Client {
 	rawClient?: LibraryClient;
+	clientInfo: ClientUser;
 	token?: string;
 	id: string;
 	guildCount: number;
 	userCount: number;
 }
 
-export interface ClientUserInfo {
-	id: string,
-	username: string,
-	discriminator: string,
-	avatar: string,
-	bot: boolean,
-	verified: boolean,
-	bio: string,
-};
+export interface ClientUser {
+	id: string;
+	username: string;
+	avatar: string;
+}
 
 /**
  * The DanBot client, for checking node statuses or posting stats to the API.
@@ -83,8 +95,9 @@ export interface ClientUserInfo {
 
 export class DanBotClient {
 	public APIKey!: string;
-	public client: Client;
+	public client!: Client;
 	public options: ExtraOptions;
+	public ready!: boolean;
 
 	/**
 	 * Creates a new DanBotClient.
@@ -115,29 +128,29 @@ export class DanBotClient {
 		 * @type {Client?}
 		 */
 
-		if ((<ClientWithLibraryOptions>options).client)
-			this.client = DanBotClient.transformClient(
-				(<ClientWithLibraryOptions>options).client,
-			);
-		else {
-			this.client = DanBotClient.transformClient(
-				<ClientWithoutLibraryOptions>options,
-			);
+		DanBotClient.transformClient(
+			(<ClientWithLibraryOptions>options).client
+				? (<ClientWithLibraryOptions>options).client
+				: <ClientWithoutLibraryOptions>options,
+		).then((client) => {
+			this.client = client;
 
-			setTimeout(
-				() =>
-					(this.client.guildCount +=
-						extraOptions.increment?.guild ?? 30),
-				extraOptions.increment?.guildTimeout ?? 300000, // Add an amount (default = 30) of users every timeout (default = 5 minutes)
-			);
+			if (client.rawClient) {
+				setTimeout(
+					() =>
+						(this.client.guildCount +=
+							extraOptions.increment?.guild ?? 30),
+					extraOptions.increment?.guildTimeout ?? 300000, // Add an amount (default = 30) of users every timeout (default = 5 minutes)
+				);
 
-			setTimeout(
-				() =>
-					(this.client.userCount +=
-						extraOptions.increment?.guild ?? 2),
-				extraOptions.increment?.userTimeout ?? 3600000, // Add an amount (default = 2) of guilds every timeout (default = 1 hour)
-			);
-		}
+				setTimeout(
+					() =>
+						(this.client.userCount +=
+							extraOptions.increment?.guild ?? 2),
+					extraOptions.increment?.userTimeout ?? 3600000, // Add an amount (default = 2) of guilds every timeout (default = 1 hour)
+				);
+			}
+		});
 
 		/**
 		 * Extra options for the client.
@@ -151,7 +164,7 @@ export class DanBotClient {
 		userCount,
 	}: { guildCount?: number; userCount?: number } = {}) {
 		const res = await Centra(
-			join(Constants.BOT_STATS_URL.replace("CLIENT_ID", this.client.id), this.client.id),
+			Constants.BOT_STATS_URL.replace("CLIENT_ID", this.client.id),
 			"POST",
 		)
 			.body(
@@ -159,7 +172,8 @@ export class DanBotClient {
 					servers: guildCount ?? this.client.guildCount,
 					users: userCount ?? this.client.userCount,
 					id: this.client.id,
-					clientInfo: this.client.rawClient ? this.client.rawClient.user : await this.fetchUserInfo(),
+					key: this.APIKey,
+					clientInfo: this.client.clientInfo,
 				},
 				"json",
 			)
@@ -170,72 +184,143 @@ export class DanBotClient {
 		// Successful.
 		if (res.status === 200) return res.body;
 		else if (res.status >= 500)
-			throw RequestError(
+			throw LibError(
 				"InternalServerError",
 				"An internal DanBot Hosting server error occured",
 				res.status,
 			);
 		else if (res.status === 400 && res.error)
-			throw RequestError("BadRequest", res.error);
+			throw LibError("BadRequest", res.message);
 		else if (res.status === 429 && res.error)
-			throw RequestError("RateLimit", res.error);
-		else RequestError("Unknown", "An unknown error occured", res.status);
+			throw LibError("RateLimit", res.message);
+		else LibError("Unknown", "An unknown error occured", res.status);
 	}
-	private async fetchUserInfo(): Promise<ClientUserInfo> {
-		const Raw = await Centra(
-			Constants.USERINFO_URL,
-			"GET",
-		)
+	private static async fetchUserInfo(token: string): Promise<ClientUser> {
+		const Raw = await Centra(Constants.USERINFO_URL, "GET")
 			.header("Content-Type", "application/json")
-			.header("Authorization", "Bot " + this.client.token!)
+			.header("Authorization", "Bot " + token)
 			.send()
 			.then((res) => res.json());
 
 		return {
 			id: Raw.id,
 			username: Raw.username,
-			discriminator: Raw.discriminator,
 			avatar: Raw.avatar,
-			bot: Raw.bot,
-			verified: Raw.verified,
-			bio: Raw.bio,
 		};
 	}
-	private static transformClient(
-		client: LibraryClient | ClientWithoutLibraryOptions,
-	): Client {
-		if ((<LibraryClient>client).guilds) {
-			if ((<DiscordJSClient>client).guilds.cache)
-				return {
-					rawClient: <DiscordJSClient>client,
-					id: (<DiscordJSClient>client).user.id,
-					get guildCount(): number {
-						return (<DiscordJSClient>client).guilds.cache.size;
-					},
-					get userCount(): number {
-						return (<DiscordJSClient>client).users.cache.size;
-					},
-				};
-			else
-				return DanBotClient.nonEnumerableProperty({
-					rawClient: <ErisClient>client,
-					id: (<ErisClient>client).user.id,
-					get guildCount(): number {
-						return (<ErisClient>client).guilds.size;
-					},
-					get userCount(): number {
-						return (<ErisClient>client).users.size;
-					},
-				}, "token", (<ErisClient>client).token);
-		} else
-			return DanBotClient.nonEnumerableProperty({
-				id: (<ClientWithoutLibraryOptions>client).id,
-				guildCount: (<ClientWithoutLibraryOptions>client).guildCount,
-				userCount: (<ClientWithoutLibraryOptions>client).userCount,
-			}, "token", (<ClientWithoutLibraryOptions>client).token);
+	private static async fetchGuildCount(token: string): Promise<number> {
+		const raw = await Centra(Constants.GUILDS_URL, "GET")
+			.header("Content-Type", "application/json")
+			.header("Authorization", "Bot " + token)
+			.send()
+			.then((res) => res.json());
+
+		let more = 0;
+
+		if (raw.length === 200) more = await this.fetchGuildCount(token);
+
+		return raw.length + more;
 	}
-	private static nonEnumerableProperty(target: any, key: string, value: any): any {
-		Object.defineProperty(target, key, {
+	private static async transformClient(
+		client: LibraryClient | ClientWithoutLibraryOptions,
+	): Promise<Client> {
+		if ((<LibraryClient>client).guilds) {
+			if ((<DiscordJSClient>client).guilds.cache) {
+				if ((<DiscordJSClient>client).readyAt)
+					return {
+						rawClient: <DiscordJSClient>client,
+						id: (<DiscordJSClient>client).user.id,
+						get guildCount(): number {
+							return (<DiscordJSClient>client).guilds.cache.size;
+						},
+						get userCount(): number {
+							return (<DiscordJSClient>client).users.cache.size;
+						},
+						clientInfo: (<DiscordJSClient>client).user,
+					};
+				else
+					throw new Error(
+						"[CLIENT_NOT_READY] The client is not ready. Please run this code in a ready event.",
+					);
+			} else {
+				if ((<ErisClient>client).ready)
+					return {
+						rawClient: <ErisClient>client,
+						id: (<ErisClient>client).user.id,
+						clientInfo: (<ErisClient>client).user,
+						get guildCount(): number {
+							return (<ErisClient>client).guilds.size;
+						},
+						get userCount(): number {
+							return (<ErisClient>client).users.size;
+						},
+					};
+				else
+					throw new Error(
+						"[CLIENT_NOT_READY] The client is not ready. Please run this code in a ready event.",
+					);
+			}
+		} else {
+			if (
+				(<ClientWithoutLibraryUsingUserDefinedOptions>client).clientInfo
+			)
+				return {
+					id: (<ClientWithoutLibraryUsingUserDefinedOptions>client)
+						.id,
+					clientInfo: (<ClientWithoutLibraryUsingUserDefinedOptions>(
+						client
+					)).clientInfo,
+					guildCount: (<ClientWithoutLibraryUsingUserDefinedOptions>(
+						client
+					)).guildCount,
+					userCount: this.resolveUserCount((<ClientWithoutLibraryUsingUserDefinedOptions>(
+						client
+					)).userCount),
+				};
+			else {
+				const userInfo = await DanBotClient.fetchUserInfo(
+					(<ClientWithoutLibraryUsingTokenOptions>client).token,
+				);
+
+				return this.defineToken(
+					{
+						id: userInfo.id,
+						clientInfo: userInfo,
+						guildCount:
+							(<ClientWithoutLibraryUsingTokenOptions>client)
+								.guildCount ??
+							(await this.fetchGuildCount(
+								(<ClientWithoutLibraryUsingTokenOptions>client)
+									.token,
+							)),
+						userCount: this.resolveUserCount(
+							(<ClientWithoutLibraryUsingTokenOptions>client)
+								.userCount,
+						),
+					},
+					(<ClientWithoutLibraryUsingTokenOptions>client).token,
+				);
+			}
+		}
+	}
+	private static resolveUserCount(userCount: UserCount): number {
+		if (userCount === "ALL") return Infinity;
+		else if (userCount === "RANDOM")
+			return Math.floor(Math.random() * 150) + 1;
+		else if (typeof userCount === "number") return userCount;
+		else if (Array.isArray(userCount))
+			return (
+				Math.floor(Math.random() * userCount[1] - userCount[0]) +
+				userCount[0]
+			);
+		else
+			throw LibError(
+				"InvalidUserCount",
+				"The user count provided was invalid",
+			);
+	}
+	private static defineToken(target: Client, value: string): Client {
+		Object.defineProperty(target, "token", {
 			value,
 			enumerable: false,
 			writable: true,
@@ -245,7 +330,7 @@ export class DanBotClient {
 	}
 }
 
-function RequestError(
+function LibError(
 	errorCode: keyof typeof Constants.ErrorCodes,
 	message: string,
 	status?: number,
