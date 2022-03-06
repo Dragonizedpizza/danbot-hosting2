@@ -2,32 +2,62 @@ import Centra from "centra";
 import { Constants } from "./Constants";
 
 export type LibraryClient = DiscordJSClient | ErisClient;
+export type UserCount = "RANDOM" | "ALL" | [number, number] | number;
+export type ClientWithoutLibraryOptions =
+	| ClientWithoutLibraryUsingTokenOptions
+	| ClientWithoutLibraryUsingUserDefinedOptions;
 
 export interface MapLike {
 	size: number;
 }
 
-export interface DiscordJSClient {
+export interface CacheManager {
+	cache: MapLike;
+}
+
+export interface BaseLibraryClient {
 	user: ClientUser;
-	guilds: {
-		cache: MapLike;
-	};
-	users: {
-		cache: MapLike;
-	};
+}
+
+export interface DiscordJSClient extends BaseLibraryClient {
+	guilds: CacheManager;
+	users: CacheManager;
 	token: string;
 	readyAt?: number;
 }
 
-export interface ErisClient {
-	user: ClientUser;
+export interface ErisClient extends BaseLibraryClient {
 	guilds: MapLike;
 	users: MapLike;
-	token: string;
+	_token: string;
 	ready: boolean;
 }
 
-export interface ClientWithLibraryOptions {
+export interface IncrementOptions {
+	by?: number;
+	timeout?: number;
+}
+
+export interface ExtraOptions {
+	fetch?: {
+		guilds?: {
+			everyPost?: boolean;
+			firstTime?: boolean;
+		};
+	};
+	autopostTimeout?: number;
+	increment?: {
+		user?: IncrementOptions;
+		guild?: IncrementOptions;
+	};
+}
+
+export interface BaseOptions {
+	APIKey: string;
+	options?: ExtraOptions;
+}
+
+export interface ClientWithLibraryOptions extends BaseOptions {
 	APIKey: string;
 	client: DiscordJSClient | ErisClient;
 	options?: ExtraOptions;
@@ -35,19 +65,11 @@ export interface ClientWithLibraryOptions {
 	userCount?: number;
 }
 
-export type ClientWithoutLibraryOptions =
-	| ClientWithoutLibraryUsingTokenOptions
-	| ClientWithoutLibraryUsingUserDefinedOptions;
-
-export interface ClientWithoutLibraryUsingTokenOptions {
-	APIKey: string;
+export interface ClientWithoutLibraryUsingTokenOptions extends BaseOptions {
 	guildCount?: number;
 	userCount: UserCount;
-	options?: ExtraOptions;
 	token: string;
 }
-
-export type UserCount = "RANDOM" | "ALL" | [number, number] | number;
 
 export interface ClientWithoutLibraryUsingUserDefinedOptions {
 	APIKey: string;
@@ -62,16 +84,10 @@ export interface ClientWithoutLibraryUsingUserDefinedOptions {
 	};
 }
 
-export interface ExtraOptions {
-	fetchGuilds?: boolean;
-	fetchUsers?: boolean;
-	autopostTimeout?: number;
-	increment?: {
-		user?: number;
-		guild?: number;
-		guildTimeout?: number;
-		userTimeout?: number;
-	};
+export interface ClientUser {
+	id: string;
+	username: string;
+	avatar: string;
 }
 
 export interface Client {
@@ -83,12 +99,6 @@ export interface Client {
 	userCount: number;
 }
 
-export interface ClientUser {
-	id: string;
-	username: string;
-	avatar: string;
-}
-
 /**
  * The DanBot client, for checking node statuses or posting stats to the API.
  */
@@ -98,16 +108,22 @@ export class DanBotClient {
 	public client!: Client;
 	public options: ExtraOptions;
 	public ready!: boolean;
+	public promise: Promise<void>;
 
 	/**
 	 * Creates a new DanBotClient.
 	 * @param {ClientWithLibraryOptions | ClientWithoutLibraryOptions} options The options for the client.
+	 * @returns {DanBotClient} The new DanBotClient.
 	 */
 
 	public constructor(
-		options: ClientWithLibraryOptions | ClientWithoutLibraryOptions,
+		args: ClientWithLibraryOptions | ClientWithoutLibraryOptions,
 	) {
-		const { options: extraOptions = {}, APIKey } = options;
+		let resolver: () => void;
+
+		this.promise = new Promise((resolve) => (resolver = resolve));
+
+		const { options = {} } = args;
 
 		/**
 		 * The DanBot client API key, for posting stats to the API.
@@ -118,7 +134,7 @@ export class DanBotClient {
 		 */
 
 		Object.defineProperty(this, "APIKey", {
-			value: APIKey,
+			value: args.APIKey,
 			enumerable: false,
 		});
 
@@ -129,27 +145,36 @@ export class DanBotClient {
 		 */
 
 		DanBotClient.transformClient(
-			(<ClientWithLibraryOptions>options).client
-				? (<ClientWithLibraryOptions>options).client
-				: <ClientWithoutLibraryOptions>options,
-		).then((client) => {
+			(<ClientWithLibraryOptions>args).client
+				? (<ClientWithLibraryOptions>args).client
+				: <ClientWithoutLibraryOptions>args,
+		).then(async (client) => {
 			this.client = client;
 
-			if (client.rawClient) {
+			if (options.fetch?.guilds?.firstTime)
+				this.client.guildCount = await DanBotClient.fetchGuildCount(
+					this.client.token!,
+				);
+
+			if (options.increment?.guild)
 				setTimeout(
 					() =>
 						(this.client.guildCount +=
-							extraOptions.increment?.guild ?? 30),
-					extraOptions.increment?.guildTimeout ?? 300000, // Add an amount (default = 30) of users every timeout (default = 5 minutes)
+							options.increment?.guild?.by ?? 2),
+					options.increment?.guild?.timeout ?? 300000, // Add an amount (default = 2) of guilds every timeout (default = 1 hour)
 				);
 
+			if (options?.increment?.user)
 				setTimeout(
 					() =>
 						(this.client.userCount +=
-							extraOptions.increment?.guild ?? 2),
-					extraOptions.increment?.userTimeout ?? 3600000, // Add an amount (default = 2) of guilds every timeout (default = 1 hour)
+							options.increment?.user?.by ?? 30),
+					options.increment?.user?.timeout ?? 3600000, // Add an amount (default = 30) of users every timeout (default = 5 minutes)
 				);
-			}
+
+			resolver();
+
+			this.ready = true;
 		});
 
 		/**
@@ -157,12 +182,19 @@ export class DanBotClient {
 		 * @type {ExtraOptions?}
 		 */
 
-		this.options = extraOptions;
+		this.options = options;
 	}
 	public async post({
 		guildCount,
 		userCount,
 	}: { guildCount?: number; userCount?: number } = {}) {
+		if (!this.ready) await this.promise;
+		
+		if (this.options.fetch?.guilds?.firstTime)
+			this.client.guildCount = await DanBotClient.fetchGuildCount(
+				this.client.token!,
+			);
+
 		const res = await Centra(
 			Constants.BOT_STATS_URL.replace("CLIENT_ID", this.client.id),
 			"POST",
@@ -179,7 +211,13 @@ export class DanBotClient {
 			)
 			.header("Content-Type", "application/json")
 			.send()
-			.then((resv) => resv.json());
+			.then((resv) => resv.json())
+			.catch(() => {
+				throw LibError(
+					"CloudflareRestricted",
+					"Unable to post statistics as Cloudflare is blocking the request",
+				);
+			});
 
 		// Successful.
 		if (res.status === 200) return res.body;
@@ -196,16 +234,22 @@ export class DanBotClient {
 		else LibError("Unknown", "An unknown error occured", res.status);
 	}
 	private static async fetchUserInfo(token: string): Promise<ClientUser> {
-		const Raw = await Centra(Constants.USERINFO_URL, "GET")
+		const raw = await Centra(Constants.USERINFO_URL, "GET")
 			.header("Content-Type", "application/json")
 			.header("Authorization", "Bot " + token)
 			.send()
 			.then((res) => res.json());
 
+		if (raw.message === Constants.UNAUTHORIZED_DISCORD_ERROR)
+			throw LibError(
+				"InvalidDiscordToken",
+				"An invalid Discord token was provided",
+			);
+
 		return {
-			id: Raw.id,
-			username: Raw.username,
-			avatar: Raw.avatar,
+			id: raw.id,
+			username: raw.username,
+			avatar: raw.avatar,
 		};
 	}
 	private static async fetchGuildCount(token: string): Promise<number> {
@@ -214,6 +258,12 @@ export class DanBotClient {
 			.header("Authorization", "Bot " + token)
 			.send()
 			.then((res) => res.json());
+
+		if (raw.message === Constants.UNAUTHORIZED_DISCORD_ERROR)
+			throw LibError(
+				"InvalidDiscordToken",
+				"An invalid Discord token was provided",
+			);
 
 		let more = 0;
 
@@ -230,17 +280,21 @@ export class DanBotClient {
 					return {
 						rawClient: <DiscordJSClient>client,
 						id: (<DiscordJSClient>client).user.id,
+						clientInfo: (<DiscordJSClient>client).user,
 						get guildCount(): number {
 							return (<DiscordJSClient>client).guilds.cache.size;
 						},
 						get userCount(): number {
 							return (<DiscordJSClient>client).users.cache.size;
 						},
-						clientInfo: (<DiscordJSClient>client).user,
+						get token(): string {
+							return (<DiscordJSClient>client).token;
+						},
 					};
 				else
-					throw new Error(
-						"[CLIENT_NOT_READY] The client is not ready. Please run this code in a ready event.",
+					throw LibError(
+						"ClientNotReady",
+						"The client is not ready. Please run this code in a ready event.",
 					);
 			} else {
 				if ((<ErisClient>client).ready)
@@ -254,10 +308,14 @@ export class DanBotClient {
 						get userCount(): number {
 							return (<ErisClient>client).users.size;
 						},
+						get token(): string {
+							return (<ErisClient>client)._token;
+						},
 					};
 				else
-					throw new Error(
-						"[CLIENT_NOT_READY] The client is not ready. Please run this code in a ready event.",
+					throw LibError(
+						"ClientNotReady",
+						"The client is not ready. Please run this code in a ready event.",
 					);
 			}
 		} else {
@@ -273,9 +331,10 @@ export class DanBotClient {
 					guildCount: (<ClientWithoutLibraryUsingUserDefinedOptions>(
 						client
 					)).guildCount,
-					userCount: this.resolveUserCount((<ClientWithoutLibraryUsingUserDefinedOptions>(
-						client
-					)).userCount),
+					userCount: this.resolveUserCount(
+						(<ClientWithoutLibraryUsingUserDefinedOptions>client)
+							.userCount,
+					),
 				};
 			else {
 				const userInfo = await DanBotClient.fetchUserInfo(
