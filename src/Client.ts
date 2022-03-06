@@ -1,5 +1,6 @@
 import Centra from "centra";
 import { Constants } from "./Constants";
+import EventEmitter from "events";
 
 export type LibraryClient = DiscordJSClient | ErisClient;
 export type UserCount = "RANDOM" | "ALL" | [number, number] | number;
@@ -103,7 +104,7 @@ export interface Client {
  * The DanBot client, for checking node statuses or posting stats to the API.
  */
 
-export class DanBotClient {
+export class DanBotClient extends EventEmitter {
 	public APIKey!: string;
 	public client!: Client;
 	public options: ExtraOptions;
@@ -119,6 +120,8 @@ export class DanBotClient {
 	public constructor(
 		args: ClientWithLibraryOptions | ClientWithoutLibraryOptions,
 	) {
+		super();
+
 		let resolver: () => void;
 
 		this.promise = new Promise((resolve) => (resolver = resolve));
@@ -175,6 +178,7 @@ export class DanBotClient {
 			resolver();
 
 			this.ready = true;
+			this.emit("ready", this);
 		});
 
 		/**
@@ -189,7 +193,7 @@ export class DanBotClient {
 		userCount,
 	}: { guildCount?: number; userCount?: number } = {}) {
 		if (!this.ready) await this.promise;
-		
+
 		if (this.options.fetch?.guilds?.firstTime)
 			this.client.guildCount = await DanBotClient.fetchGuildCount(
 				this.client.token!,
